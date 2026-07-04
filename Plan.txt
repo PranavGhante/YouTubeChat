@@ -1,0 +1,438 @@
+Conversational RAG Agent For YouTube Videos
+===========================================
+
+Goal
+----
+Build a conversational Q&A agent over long YouTube videos that:
+
+- Accepts a YouTube video URL.
+- Extracts the timestamped transcript.
+- Chunks and embeds the transcript.
+- Answers user questions using retrieved transcript context.
+- Returns timestamped citations that can be clicked to jump to the video.
+
+
+Core Pipeline
+-------------
+
+YouTube URL
+  -> transcript extraction
+  -> transcript cleanup
+  -> timestamp-aware chunking
+  -> embeddings
+  -> vector search
+  -> answer generation
+  -> timestamped citations
+
+
+Step 1: Define The MVP
+----------------------
+
+Start with one video at a time.
+
+MVP features:
+
+- User enters a YouTube URL.
+- App fetches the transcript.
+- App chunks and embeds the transcript.
+- User asks questions in a chat interface.
+- Agent answers only from transcript evidence.
+- Agent includes timestamped citations like [02:15-03:05].
+- Clicking a citation seeks the YouTube player to that timestamp.
+
+
+Step 2: Extract The Transcript
+------------------------------
+
+Use available YouTube captions first because they already include timestamps.
+
+Recommended options:
+
+- Python: youtube-transcript-api
+- Official route: YouTube Data API
+- Fallback later: Whisper for videos without captions
+
+Target transcript format:
+
+[
+  {
+    "text": "Today we are going to talk about retrieval augmented generation...",
+    "start": 12.4,
+    "duration": 5.2
+  }
+]
+
+For the first version, only support videos that already have captions.
+Add Whisper transcription after the main RAG loop works.
+
+
+Step 3: Normalize And Store Transcript
+--------------------------------------
+
+Clean the transcript while preserving timing.
+
+Processing tasks:
+
+- Remove repeated whitespace.
+- Merge tiny caption fragments into readable text.
+- Preserve start and end timestamps.
+- Store raw transcript separately from processed chunks.
+- Store video metadata such as title, channel, URL, duration, and video ID.
+
+Suggested data model:
+
+videos
+- id
+- youtube_video_id
+- title
+- url
+- channel
+- duration
+- processing_status
+
+transcript_segments
+- id
+- video_id
+- text
+- start_time
+- end_time
+- segment_index
+
+chunks
+- id
+- video_id
+- text
+- start_time
+- end_time
+- chunk_index
+- embedding
+
+
+Step 4: Chunk With Timestamp Awareness
+--------------------------------------
+
+Do not chunk blindly by character count. Citations need stable time ranges.
+
+Recommended strategy:
+
+- Merge transcript segments into chunks of about 300-800 tokens.
+- Use overlap of about 50-120 tokens.
+- Set chunk start_time from the first transcript segment in the chunk.
+- Set chunk end_time from the last transcript segment in the chunk.
+- Keep references to original segment IDs if possible.
+
+Example chunk:
+
+{
+  "text": "Retrieval augmented generation, or RAG, combines retrieval with generation...",
+  "start_time": 125.2,
+  "end_time": 182.8,
+  "segment_ids": [41, 42, 43, 44]
+}
+
+
+Step 5: Generate Embeddings
+---------------------------
+
+Embed each chunk and store the vectors.
+
+Good vector storage options:
+
+- Chroma for a fast local prototype.
+- PostgreSQL + pgvector for a production-friendly app.
+- Qdrant for a dedicated vector database.
+- Pinecone or Weaviate for managed vector search.
+
+Recommended MVP choice:
+
+- Use Chroma if speed of prototyping matters most.
+- Use PostgreSQL + pgvector if you already want a durable backend database.
+
+Embedding model options:
+
+- OpenAI text-embedding-3-small for cost-effective embeddings.
+- OpenAI text-embedding-3-large for higher quality retrieval.
+- Local embedding models if privacy or offline use is important.
+
+
+Step 6: Build Retrieval
+-----------------------
+
+For each user question:
+
+1. Embed the question.
+2. Search for the top matching transcript chunks.
+3. Optionally rerank the retrieved chunks.
+4. Send the best chunks to the answer model.
+
+Basic retrieval flow:
+
+question
+  -> question embedding
+  -> vector search
+  -> top 5-10 chunks
+  -> answer prompt
+
+Later improvements:
+
+- Hybrid search: semantic search plus keyword search.
+- Reranking for better context ordering.
+- Metadata filters for video ID, playlist ID, chapter, or time range.
+
+
+Step 7: Generate Answers With Citations
+---------------------------------------
+
+The answer model should only answer using retrieved transcript excerpts.
+
+Prompt behavior:
+
+- Use only the provided transcript excerpts.
+- If the answer is not in the excerpts, say it could not be found in the video.
+- Include timestamped citations for factual claims.
+- Prefer concise answers grounded in the transcript.
+
+Example context passed to the model:
+
+[Chunk 1]
+Time: 02:05-03:02
+Text: Retrieval augmented generation combines a retriever with a generator...
+
+[Chunk 2]
+Time: 15:40-16:12
+Text: The quality of chunking affects the accuracy of retrieval...
+
+Example answer:
+
+The speaker explains that RAG lets the model answer using external retrieved
+knowledge instead of relying only on its training data [02:05-03:02]. They also
+say chunking quality matters because poor chunks can make retrieval less accurate
+[15:40-16:12].
+
+Return citations as structured data:
+
+{
+  "answer": "The speaker explains...",
+  "citations": [
+    {
+      "start_time": 125.2,
+      "end_time": 182.8,
+      "label": "02:05-03:02",
+      "text": "Relevant transcript excerpt..."
+    }
+  ]
+}
+
+
+Step 8: Add Conversational Memory
+---------------------------------
+
+For follow-up questions, rewrite the user message into a standalone search query.
+
+Example:
+
+Previous answer discussed RAG limitations.
+User asks: "What did he say after that?"
+Standalone query: "What did the speaker say after discussing RAG limitations?"
+
+Recommended flow:
+
+1. Keep recent chat history.
+2. Rewrite the latest user message into a standalone query.
+3. Retrieve chunks using that standalone query.
+4. Answer using retrieved transcript chunks.
+5. Include citations from the newly retrieved evidence.
+
+Keep memory lightweight:
+
+- Last 3-6 turns.
+- Current video ID.
+- Previous cited timestamps.
+- Optional current timestamp focus.
+
+
+Step 9: Build Backend API
+-------------------------
+
+Suggested endpoints:
+
+POST /videos
+- Accepts a YouTube URL.
+- Extracts video ID.
+- Fetches metadata and transcript.
+- Chunks and embeds transcript.
+- Returns video ID and processing status.
+
+GET /videos/:id
+- Returns video metadata.
+- Returns processing status.
+
+POST /chat
+- Accepts video_id, conversation_id, and message.
+- Retrieves relevant chunks.
+- Generates an answer.
+- Returns answer plus citations.
+
+Optional later endpoints:
+
+GET /videos/:id/transcript
+- Returns transcript segments.
+
+GET /conversations/:id
+- Returns chat history.
+
+
+Step 10: Build Frontend
+-----------------------
+
+Core interface:
+
+- YouTube URL input.
+- Processing status.
+- Embedded YouTube player.
+- Chat panel.
+- Citation chips below each answer.
+- Clickable citations that seek the video player.
+- Optional transcript panel with highlighted cited segments.
+
+Recommended layout:
+
+Left side:
+- YouTube player.
+- Transcript or citations panel.
+
+Right side:
+- Chat messages.
+- Question input.
+
+Useful later features:
+
+- Ask about current playback position.
+- Highlight transcript around the current timestamp.
+- Show source snippets under citations.
+- Save conversations per video.
+- Playlist support.
+
+
+Step 11: Handle Long Videos Well
+--------------------------------
+
+Long videos need stronger retrieval than short clips.
+
+Recommended approach:
+
+- Build normal detailed chunks for precise citations.
+- Build larger section summaries for broad retrieval.
+- Search section summaries first for broad topic location.
+- Then search detailed chunks inside the best sections.
+
+Long-video retrieval flow:
+
+question
+  -> search section summaries
+  -> identify likely video sections
+  -> search detailed chunks within those sections
+  -> answer with precise timestamp citations
+
+Optional enhancements:
+
+- Use YouTube chapters when available.
+- Auto-detect topic shifts.
+- Build summary chunks every 5-10 minutes.
+- Store per-section titles and summaries.
+
+
+Step 12: Add Evaluation
+-----------------------
+
+Create a small test set for several videos.
+
+Each test case should include:
+
+- Question.
+- Expected answer.
+- Expected timestamp range.
+- Notes about acceptable citations.
+
+Evaluate:
+
+- Did retrieval find the correct chunk?
+- Did the answer stay grounded in transcript evidence?
+- Are citations accurate?
+- Did the model refuse when the answer was not in the transcript?
+- What was the latency?
+- What was the cost per processed video and per question?
+
+
+Step 13: Recommended Tech Stack
+-------------------------------
+
+Python MVP:
+
+- Backend: FastAPI
+- Transcript: youtube-transcript-api
+- Embeddings: OpenAI embeddings
+- Vector DB: Chroma or PostgreSQL + pgvector
+- LLM: OpenAI chat model
+- Frontend: React or Next.js
+- Player: YouTube iframe API
+
+Production-leaning stack:
+
+- Backend: FastAPI or Node.js
+- Queue: Celery, RQ, or BullMQ
+- Database: PostgreSQL
+- Vector search: pgvector or Qdrant
+- File/object storage: S3-compatible storage for transcripts and derived data
+- Auth and rate limiting if public
+
+
+Step 14: Implementation Order
+-----------------------------
+
+1. Accept a YouTube URL and extract the video ID.
+2. Fetch transcript with timestamps.
+3. Display the raw transcript.
+4. Chunk transcript while preserving timestamp ranges.
+5. Embed chunks and store them.
+6. Implement vector search.
+7. Implement one-shot Q&A with citations.
+8. Add chat history and query rewriting.
+9. Build frontend with YouTube player.
+10. Make citations clickable.
+11. Add processing status and error handling.
+12. Add Whisper fallback for missing captions.
+13. Add summaries and section retrieval for long videos.
+14. Add evaluation tests.
+
+
+Step 15: Common Pitfalls
+------------------------
+
+Avoid:
+
+- Losing timestamps during chunking.
+- Making chunks so large that citations become vague.
+- Making chunks so small that context becomes incomplete.
+- Letting the model answer from general knowledge instead of transcript context.
+- Returning citations that were retrieved but not actually used.
+- Weak follow-up handling in conversation.
+- Ignoring videos without captions.
+- Ignoring poor auto-caption quality.
+- Processing long videos synchronously without progress updates.
+- Re-embedding the same video repeatedly.
+
+
+First Milestone
+---------------
+
+The first useful milestone is:
+
+- A user can paste a YouTube URL.
+- The app extracts captions.
+- The transcript is chunked and embedded.
+- The user can ask one question.
+- The answer includes at least one accurate timestamped citation.
+
+Once this works, add conversation memory, clickable video seeking, Whisper fallback,
+and long-video summary retrieval.
