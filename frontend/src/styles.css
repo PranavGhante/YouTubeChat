@@ -61,9 +61,14 @@ h2 {
   font-size: 1rem;
 }
 
-.url-form {
+.url-form,
+.search-form {
   display: grid;
   gap: 10px;
+}
+
+.search-form {
+  margin-top: 22px;
 }
 
 label {
@@ -171,6 +176,32 @@ button:disabled {
 
 .transcript-row p {
   line-height: 1.5;
+}
+
+.chunk-row {
+  display: grid;
+  gap: 8px;
+  border-bottom: 1px solid #edf1f4;
+  padding: 14px 20px;
+}
+
+.chunk-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #637685;
+  font-size: 0.88rem;
+}
+
+.chunk-meta time {
+  color: #0f6b7c;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+}
+
+.chunk-row p {
+  line-height: 1.55;
 }
 
 .empty-state {

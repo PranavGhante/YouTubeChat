@@ -33,3 +33,26 @@ The frontend runs at `http://localhost:5173`.
   "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 }
 ```
+
+`POST /api/index`
+
+Fetches the transcript, chunks it with timestamp ranges, embeds each chunk, and
+stores the chunks in local Chroma storage under `backend/chroma`.
+
+```json
+{
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+}
+```
+
+`POST /api/search`
+
+Searches indexed chunks for a video.
+
+```json
+{
+  "video_id": "dQw4w9WgXcQ",
+  "query": "main topic discussed",
+  "limit": 5
+}
+```

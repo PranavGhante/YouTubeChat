@@ -2,13 +2,22 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 from youtube_transcript_api import (
     NoTranscriptFound,
     TranscriptsDisabled,
     YouTubeTranscriptApi,
 )
 
+from .chunking import chunk_transcript
+from .schemas import (
+    IndexVideoResponse,
+    SearchRequest,
+    SearchResponse,
+    TranscriptEntry,
+    TranscriptRequest,
+    TranscriptResponse,
+)
+from .vector_store import search_chunks, store_chunks
 from .youtube import InvalidYouTubeUrlError, extract_video_id, format_timestamp
 
 
@@ -26,23 +35,6 @@ app.add_middleware(
 )
 
 
-class TranscriptRequest(BaseModel):
-    url: str = Field(..., min_length=1)
-
-
-class TranscriptEntry(BaseModel):
-    text: str
-    start: float
-    duration: float
-    end: float
-    timestamp: str
-
-
-class TranscriptResponse(BaseModel):
-    video_id: str
-    transcript: list[TranscriptEntry]
-
-
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -50,8 +42,37 @@ def health() -> dict[str, str]:
 
 @app.post("/api/transcript", response_model=TranscriptResponse)
 def get_transcript(payload: TranscriptRequest) -> TranscriptResponse:
+    video_id, transcript = fetch_transcript(payload.url)
+    return TranscriptResponse(video_id=video_id, transcript=transcript)
+
+
+@app.post("/api/index", response_model=IndexVideoResponse)
+def index_video(payload: TranscriptRequest) -> IndexVideoResponse:
+    video_id, transcript = fetch_transcript(payload.url)
+    chunks = chunk_transcript(video_id, transcript)
+    store_chunks(video_id, chunks)
+
+    return IndexVideoResponse(
+        video_id=video_id,
+        transcript_count=len(transcript),
+        chunk_count=len(chunks),
+        chunks=chunks,
+    )
+
+
+@app.post("/api/search", response_model=SearchResponse)
+def search_video(payload: SearchRequest) -> SearchResponse:
+    results = search_chunks(payload.video_id, payload.query, payload.limit)
+    return SearchResponse(
+        video_id=payload.video_id,
+        query=payload.query,
+        results=results,
+    )
+
+
+def fetch_transcript(url: str) -> tuple[str, list[TranscriptEntry]]:
     try:
-        video_id = extract_video_id(payload.url)
+        video_id = extract_video_id(url)
     except InvalidYouTubeUrlError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -74,7 +95,7 @@ def get_transcript(payload: TranscriptRequest) -> TranscriptResponse:
         ) from exc
 
     transcript = [normalize_transcript_entry(entry) for entry in raw_transcript]
-    return TranscriptResponse(video_id=video_id, transcript=transcript)
+    return video_id, transcript
 
 
 def normalize_transcript_entry(entry: Any) -> TranscriptEntry:

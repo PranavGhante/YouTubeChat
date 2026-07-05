@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
-const API_URL = "http://localhost:8000/api/transcript";
+const API_BASE_URL = "http://localhost:8000/api";
 
 function App() {
   const [url, setUrl] = useState("");
@@ -10,6 +10,10 @@ function App() {
   const [error, setError] = useState("");
   const [videoId, setVideoId] = useState("");
   const [transcript, setTranscript] = useState([]);
+  const [chunks, setChunks] = useState([]);
+  const [query, setQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState([]);
 
   async function fetchTranscript(event) {
     event.preventDefault();
@@ -17,9 +21,11 @@ function App() {
     setError("");
     setVideoId("");
     setTranscript([]);
+    setChunks([]);
+    setSearchResults([]);
 
     try {
-      const response = await fetch(API_URL, {
+      const response = await fetch(`${API_BASE_URL}/transcript`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -42,6 +48,72 @@ function App() {
     }
   }
 
+  async function indexVideo(event) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    setVideoId("");
+    setTranscript([]);
+    setChunks([]);
+    setSearchResults([]);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/index`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ url }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Could not index video.");
+      }
+
+      setVideoId(data.video_id);
+      setChunks(data.chunks);
+    } catch (err) {
+      setError(err.message || "Something went wrong.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function searchChunks(event) {
+    event.preventDefault();
+    setSearching(true);
+    setError("");
+    setSearchResults([]);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/search`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          video_id: videoId,
+          query,
+          limit: 5,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Could not search chunks.");
+      }
+
+      setSearchResults(data.results);
+    } catch (err) {
+      setError(err.message || "Something went wrong.");
+    } finally {
+      setSearching(false);
+    }
+  }
+
   return (
     <main className="app-shell">
       <section className="workspace">
@@ -61,19 +133,70 @@ function App() {
               <button type="submit" disabled={loading}>
                 {loading ? "Fetching..." : "Fetch transcript"}
               </button>
+              <button type="button" disabled={loading} onClick={indexVideo}>
+                {loading ? "Indexing..." : "Index chunks"}
+              </button>
             </div>
           </form>
           {error ? <p className="error">{error}</p> : null}
           {videoId ? <p className="video-id">Video ID: {videoId}</p> : null}
+          {chunks.length ? (
+            <form className="search-form" onSubmit={searchChunks}>
+              <label htmlFor="search-query">Search indexed chunks</label>
+              <input
+                id="search-query"
+                type="search"
+                placeholder="Ask about a topic in this video"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                required
+              />
+              <button type="submit" disabled={searching || !videoId}>
+                {searching ? "Searching..." : "Search"}
+              </button>
+            </form>
+          ) : null}
         </div>
 
         <div className="transcript-panel">
           <div className="panel-header">
-            <h2>Raw Transcript</h2>
-            <span>{transcript.length} entries</span>
+            <h2>{chunks.length ? "Indexed Chunks" : "Raw Transcript"}</h2>
+            <span>
+              {chunks.length
+                ? `${chunks.length} chunks`
+                : `${transcript.length} entries`}
+            </span>
           </div>
 
-          {transcript.length ? (
+          {searchResults.length ? (
+            <ol className="transcript-list">
+              {searchResults.map((result) => (
+                <li key={result.id} className="chunk-row">
+                  <div className="chunk-meta">
+                    <time>
+                      [{result.start_timestamp}-{result.end_timestamp}]
+                    </time>
+                    <span>Distance {result.distance?.toFixed(4)}</span>
+                  </div>
+                  <p>{result.text}</p>
+                </li>
+              ))}
+            </ol>
+          ) : chunks.length ? (
+            <ol className="transcript-list">
+              {chunks.map((chunk) => (
+                <li key={chunk.id} className="chunk-row">
+                  <div className="chunk-meta">
+                    <time>
+                      [{chunk.start_timestamp}-{chunk.end_timestamp}]
+                    </time>
+                    <span>Chunk {chunk.chunk_index + 1}</span>
+                  </div>
+                  <p>{chunk.text}</p>
+                </li>
+              ))}
+            </ol>
+          ) : transcript.length ? (
             <ol className="transcript-list">
               {transcript.map((entry, index) => (
                 <li key={`${entry.start}-${index}`} className="transcript-row">
@@ -84,7 +207,7 @@ function App() {
             </ol>
           ) : (
             <div className="empty-state">
-              Paste a YouTube URL with captions to display the raw transcript.
+              Paste a YouTube URL with captions to fetch a transcript or index chunks.
             </div>
           )}
         </div>

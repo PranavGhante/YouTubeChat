@@ -2,3 +2,6 @@ fastapi
 uvicorn[standard]
 youtube-transcript-api
 pydantic
+chromadb
+google-genai
+python-dotenv
