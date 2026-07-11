@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -14,6 +14,11 @@ function App() {
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
+  const [conversationId, setConversationId] = useState("");
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [messages, setMessages] = useState([]);
+  const playerRef = useRef(null);
 
   async function fetchTranscript(event) {
     event.preventDefault();
@@ -23,6 +28,8 @@ function App() {
     setTranscript([]);
     setChunks([]);
     setSearchResults([]);
+    setMessages([]);
+    setConversationId("");
 
     try {
       const response = await fetch(`${API_BASE_URL}/transcript`, {
@@ -56,6 +63,8 @@ function App() {
     setTranscript([]);
     setChunks([]);
     setSearchResults([]);
+    setMessages([]);
+    setConversationId("");
 
     try {
       const response = await fetch(`${API_BASE_URL}/index`, {
@@ -80,6 +89,85 @@ function App() {
       setLoading(false);
     }
   }
+
+  async function askQuestion(event) {
+    event.preventDefault();
+    const question = chatInput.trim();
+    if (!question || !videoId) {
+      return;
+    }
+
+    setChatInput("");
+    setChatLoading(true);
+    setError("");
+    setMessages((current) => [
+      ...current,
+      { role: "user", content: question },
+    ]);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          video_id: videoId,
+          message: question,
+          conversation_id: conversationId || null,
+          limit: 6,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Could not answer question.");
+      }
+
+      setConversationId(data.conversation_id);
+      setMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          content: data.answer,
+          citations: data.citations,
+          rewrittenQuery: data.rewritten_query,
+        },
+      ]);
+    } catch (err) {
+      setError(err.message || "Something went wrong.");
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  function seekTo(seconds) {
+    if (!playerRef.current) {
+      return;
+    }
+
+    playerRef.current.contentWindow.postMessage(
+      JSON.stringify({
+        event: "command",
+        func: "seekTo",
+        args: [seconds, true],
+      }),
+      "*",
+    );
+    playerRef.current.contentWindow.postMessage(
+      JSON.stringify({
+        event: "command",
+        func: "playVideo",
+        args: [],
+      }),
+      "*",
+    );
+  }
+
+  const playerUrl = videoId
+    ? `https://www.youtube.com/embed/${videoId}?enablejsapi=1`
+    : "";
 
   async function searchChunks(event) {
     event.preventDefault();
@@ -156,6 +244,34 @@ function App() {
               </button>
             </form>
           ) : null}
+
+          {videoId ? (
+            <div className="player-shell">
+              <iframe
+                ref={playerRef}
+                title="YouTube video player"
+                src={playerUrl}
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+              />
+            </div>
+          ) : null}
+
+          {chunks.length ? (
+            <form className="chat-form" onSubmit={askQuestion}>
+              <label htmlFor="chat-question">Ask with citations</label>
+              <textarea
+                id="chat-question"
+                placeholder="Ask a question about the indexed video"
+                value={chatInput}
+                onChange={(event) => setChatInput(event.target.value)}
+                required
+              />
+              <button type="submit" disabled={chatLoading || !videoId}>
+                {chatLoading ? "Answering..." : "Ask"}
+              </button>
+            </form>
+          ) : null}
         </div>
 
         <div className="transcript-panel">
@@ -208,6 +324,43 @@ function App() {
           ) : (
             <div className="empty-state">
               Paste a YouTube URL with captions to fetch a transcript or index chunks.
+            </div>
+          )}
+        </div>
+
+        <div className="chat-panel">
+          <div className="panel-header">
+            <h2>Q&A</h2>
+            <span>{messages.length} messages</span>
+          </div>
+          {messages.length ? (
+            <ol className="message-list">
+              {messages.map((message, index) => (
+                <li key={`${message.role}-${index}`} className={`message ${message.role}`}>
+                  <p>{message.content}</p>
+                  {message.rewrittenQuery ? (
+                    <small>Search: {message.rewrittenQuery}</small>
+                  ) : null}
+                  {message.citations?.length ? (
+                    <div className="citation-list">
+                      {message.citations.map((citation) => (
+                        <button
+                          key={citation.id}
+                          type="button"
+                          className="citation-button"
+                          onClick={() => seekTo(citation.start)}
+                        >
+                          {citation.start_timestamp}-{citation.end_timestamp}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <div className="empty-state">
+              Index a video, then ask questions to get cited answers.
             </div>
           )}
         </div>

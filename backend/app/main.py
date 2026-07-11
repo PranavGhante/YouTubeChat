@@ -10,12 +10,20 @@ from youtube_transcript_api import (
 
 from .chunking import chunk_transcript
 from .schemas import (
+    ChatRequest,
+    ChatResponse,
     IndexVideoResponse,
     SearchRequest,
     SearchResponse,
     TranscriptEntry,
     TranscriptRequest,
     TranscriptResponse,
+)
+from .llm import (
+    answer_with_citations,
+    get_or_create_conversation_id,
+    rewrite_query,
+    save_turn,
 )
 from .vector_store import search_chunks, store_chunks
 from .youtube import InvalidYouTubeUrlError, extract_video_id, format_timestamp
@@ -62,11 +70,56 @@ def index_video(payload: TranscriptRequest) -> IndexVideoResponse:
 
 @app.post("/api/search", response_model=SearchResponse)
 def search_video(payload: SearchRequest) -> SearchResponse:
-    results = search_chunks(payload.video_id, payload.query, payload.limit)
+    try:
+        results = search_chunks(payload.video_id, payload.query, payload.limit)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not search indexed chunks.",
+        ) from exc
+
     return SearchResponse(
         video_id=payload.video_id,
         query=payload.query,
         results=results,
+    )
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+def chat_video(payload: ChatRequest) -> ChatResponse:
+    conversation_id = get_or_create_conversation_id(payload.conversation_id)
+    rewritten_query = rewrite_query(conversation_id, payload.message)
+    try:
+        results = search_chunks(payload.video_id, rewritten_query, payload.limit)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not retrieve transcript chunks for this question.",
+        ) from exc
+
+    try:
+        answer, citations = answer_with_citations(
+            question=payload.message,
+            rewritten_query=rewritten_query,
+            results=results,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not generate an answer from the retrieved chunks.",
+        ) from exc
+
+    save_turn(conversation_id, payload.message, answer)
+
+    return ChatResponse(
+        conversation_id=conversation_id,
+        video_id=payload.video_id,
+        message=payload.message,
+        rewritten_query=rewritten_query,
+        answer=answer,
+        citations=citations,
     )
 
 

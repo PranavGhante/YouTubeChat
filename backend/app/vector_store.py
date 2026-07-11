@@ -40,6 +40,9 @@ def store_chunks(video_id: str, chunks: list[ChunkEntry]) -> None:
 
 
 def search_chunks(video_id: str, query: str, limit: int) -> list[SearchResult]:
+    if collection.count() == 0:
+        return []
+
     result = collection.query(
         query_texts=[query],
         n_results=limit,

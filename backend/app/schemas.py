@@ -58,3 +58,34 @@ class SearchResponse(BaseModel):
     video_id: str
     query: str
     results: list[SearchResult]
+
+
+class ChatTurn(BaseModel):
+    role: str
+    content: str
+
+
+class ChatRequest(BaseModel):
+    video_id: str = Field(..., min_length=1)
+    message: str = Field(..., min_length=1)
+    conversation_id: str | None = None
+    limit: int = Field(default=6, ge=1, le=12)
+
+
+class Citation(BaseModel):
+    id: str
+    text: str
+    start: float
+    end: float
+    start_timestamp: str
+    end_timestamp: str
+    chunk_index: int
+
+
+class ChatResponse(BaseModel):
+    conversation_id: str
+    video_id: str
+    message: str
+    rewritten_query: str
+    answer: str
+    citations: list[Citation]
